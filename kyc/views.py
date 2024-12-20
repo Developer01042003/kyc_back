@@ -1,23 +1,59 @@
+# views.py
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import action
 from .models import KYC
 from .serializers import KYCSerializer, KYCVerificationSerializer
 from utils.aws_helper import AWSRekognition
+import base64
+import json
 
 class KYCViewSet(viewsets.ModelViewSet):
     queryset = KYC.objects.all()
     serializer_class = KYCSerializer
     permission_classes = [IsAuthenticated]
 
+    @action(detail=False, methods=['post'])
+    def start_liveness_session(self, request):
+        try:
+            aws = AWSRekognition()
+            session_id = aws.create_face_liveness_session()
+            return Response({
+                'sessionId': session_id
+            })
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'])
+    def check_liveness(self, request):
+        try:
+            aws = AWSRekognition()
+            session_id = request.data.get('sessionId')
+            frames = request.data.get('frames')
+
+            liveness_result = aws.check_face_liveness(session_id, frames)
+            return Response(liveness_result)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     def create(self, request):
         serializer = KYCVerificationSerializer(data=request.data)
         if serializer.is_valid():
             aws = AWSRekognition()
             
-            # Read image file
-            image_file = serializer.validated_data['selfie']
-            image_bytes = image_file.read()
+            # Get base64 image and convert to bytes
+            image_data = serializer.validated_data['selfie']
+            if isinstance(image_data, str) and image_data.startswith('data:image'):
+                # Handle base64 string from frontend
+                image_bytes = base64.b64decode(image_data.split(',')[1])
+            else:
+                # Handle file upload
+                image_bytes = image_data.read()
 
             # Verify face
             if not aws.verify_face(image_bytes):
