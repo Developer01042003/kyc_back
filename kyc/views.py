@@ -1,4 +1,3 @@
-# views.py
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -40,12 +39,6 @@ class KYCViewSet(viewsets.ModelViewSet):
 
             aws = AWSRekognition()
             result = aws.process_liveness_frames(session_id, frames)
-
-            if result['isLive']:
-                # Get best frame for KYC
-                best_frame = aws.get_best_frame(frames)
-                if best_frame:
-                    result['bestFrame'] = best_frame
 
             return Response(result)
         except Exception as e:
