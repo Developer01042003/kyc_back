@@ -1,9 +1,9 @@
 import boto3
 import hashlib
 import time
-from django.conf import settings
-import logging
 import base64
+import logging
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +20,14 @@ class AWSRekognition:
             region_name=settings.AWS_S3_REGION_NAME
         )
         self.collection_id = 'unique_faces'
-        self._ensure_collection_exists()  # Check collection on initialization
+        self._ensure_collection_exists()
 
     def _ensure_collection_exists(self):
         """Ensure collection exists, create if it doesn't"""
         try:
-            # Try to describe the collection
             self.client.describe_collection(CollectionId=self.collection_id)
             logger.info(f"Collection {self.collection_id} exists")
         except self.client.exceptions.ResourceNotFoundException:
-            # Collection doesn't exist, create it
             try:
                 self.client.create_collection(CollectionId=self.collection_id)
                 logger.info(f"Created collection {self.collection_id}")
@@ -40,47 +38,122 @@ class AWSRekognition:
     def create_face_liveness_session(self):
         """Create a new face liveness session"""
         try:
-            response = self.client.create_face_liveness_session()
+            response = self.client.create_face_liveness_session(
+                ClientRequestToken=str(int(time.time()))
+            )
             logger.info("Created face liveness session")
             return response['SessionId']
         except Exception as e:
             logger.error(f"Error creating liveness session: {str(e)}")
             raise
 
-    def process_liveness_frames(self, session_id, frames):
-        """Process multiple frames for liveness detection"""
+    def check_liveness_frames(self, session_id, frames):
+        """Check liveness for a given set of frames"""
         try:
-            # Process each frame
+            processed_frames = []
             for frame in frames:
-                # Convert base64 frame to bytes if needed
-                if isinstance(frame, str) and frame.startswith('data:image'):
-                    image_bytes = base64.b64decode(frame.split(',')[1])
+                # Convert base64 to bytes if needed
+                if isinstance(frame, str):
+                    if frame.startswith('data:image'):
+                        image_bytes = base64.b64decode(frame.split(',')[1])
+                    else:
+                        image_bytes = base64.b64decode(frame)
                 else:
                     image_bytes = frame
 
-                # Update the liveness session with each frame
-                self.client.update_face_liveness_session(
-                    SessionId=session_id,
-                    Image={
-                        'Bytes': image_bytes
-                    }
-                )
+                # Update liveness session with each frame
+                try:
+                    self.client.update_face_liveness_session(
+                        SessionId=session_id,
+                        Image={'Bytes': image_bytes}
+                    )
+                    processed_frames.append(image_bytes)
+                except Exception as frame_error:
+                    logger.warning(f"Error processing frame: {str(frame_error)}")
 
-            # Get final results
+            # Get final liveness session results
             result = self.client.get_face_liveness_session_results(
                 SessionId=session_id
             )
 
-            logger.info(f"Liveness check completed with confidence: {result['Confidence']}")
+            # Determine liveness based on confidence
+            is_live = result.get('Confidence', 0) > 90
             
             return {
-                'isLive': result['Confidence'] > 90,
-                'confidence': result['Confidence'],
+                'status': 'success',
+                'isLive': is_live,
+                'confidence': result.get('Confidence', 0),
                 'sessionId': session_id
             }
+
+        except Exception as e:
+            logger.error(f"Error checking liveness frames: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'isLive': False,
+                'confidence': 0
+            }
+
+    def process_liveness_frames(self, session_id, frames):
+        """Process liveness detection frames"""
+        try:
+            processed_frames = []
+            for frame in frames:
+                # Convert base64 to bytes if needed
+                if isinstance(frame, str):
+                    if frame.startswith('data:image'):
+                        image_bytes = base64.b64decode(frame.split(',')[1])
+                    else:
+                        image_bytes = base64.b64decode(frame)
+                else:
+                    image_bytes = frame
+
+                # Update liveness session
+                try:
+                    self.client.update_face_liveness_session(
+                        SessionId=session_id,
+                        Image={'Bytes': image_bytes}
+                    )
+                    processed_frames.append(image_bytes)
+                except Exception as frame_error:
+                    logger.warning(f"Error processing frame: {str(frame_error)}")
+
+            # Get final liveness session results
+            result = self.client.get_face_liveness_session_results(
+                SessionId=session_id
+            )
+
+            # Determine liveness
+            is_live = result.get('Confidence', 0) > 90
+
+            # If liveness is confirmed, get the best frame
+            selfie_url = None
+            if is_live:
+                best_frame = self.get_best_frame(processed_frames)
+                
+                # Upload best frame to S3 if available
+                if best_frame:
+                    image_hash = self.generate_image_hash(best_frame)
+                    file_name = f'liveness/{image_hash}.jpg'
+                    selfie_url = self.upload_to_s3(best_frame, file_name)
+
+            return {
+                'status': 'success',
+                'isLive': is_live,
+                'confidence': result.get('Confidence', 0),
+                'sessionId': session_id,
+                'selfieUrl': selfie_url
+            }
+
         except Exception as e:
             logger.error(f"Error processing liveness frames: {str(e)}")
-            raise
+            return {
+                'status': 'error',
+                'message': str(e),
+                'isLive': False,
+                'confidence': 0
+            }
 
     def verify_face(self, image_bytes):
         try:
