@@ -11,39 +11,50 @@ class KYCViewSet(viewsets.ModelViewSet):
     serializer_class = KYCSerializer
     permission_classes = [IsAuthenticated]
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], url_path='start-liveness-session')
     def start_liveness_session(self, request):
         """Start a new liveness detection session"""
         try:
+            logger.info(f"Starting liveness session for user: {request.user.id}")
             aws = AWSRekognition()
             session_id = aws.create_face_liveness_session()
+            
+            logger.info(f"Created liveness session: {session_id}")
             return Response({
+                'status': 'success',
                 'sessionId': session_id
             })
         except Exception as e:
+            logger.error(f"Error creating liveness session: {str(e)}")
             return Response({
-                'error': str(e)
+                'status': 'error',
+                'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], url_path='check-liveness')
     def check_liveness(self, request):
-        """Process frames for liveness detection"""
+        """Check liveness session results"""
         try:
             session_id = request.data.get('sessionId')
-            frames = request.data.get('frames')
-
-            if not session_id or not frames:
+            if not session_id:
                 return Response({
-                    'error': 'Missing sessionId or frames'
+                    'status': 'error',
+                    'message': 'Session ID is required'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
+            logger.info(f"Checking liveness for session: {session_id}")
             aws = AWSRekognition()
-            result = aws.process_liveness_frames(session_id, frames)
+            result = aws.get_face_liveness_session_results(session_id)
 
-            return Response(result)
-        except Exception as e:
             return Response({
-                'error': str(e)
+                'status': 'success',
+                'data': result
+            })
+        except Exception as e:
+            logger.error(f"Error checking liveness: {str(e)}")
+            return Response({
+                'status': 'error',
+                'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # Your existing create method remains the same
