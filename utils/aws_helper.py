@@ -39,59 +39,38 @@ class AWSRekognition:
         """Create a new face liveness session"""
         try:
             response = self.client.create_face_liveness_session()
-            logger.info("Created face liveness session")
-            return response['SessionId']
+            session_id = response.get("SessionId")
+            logger.info(f'Created liveness session: {session_id}')
+            return session_id
         except Exception as e:
             logger.error(f"Error creating liveness session: {str(e)}")
             raise
 
-    def check_liveness_frames(self, session_id, frames):
-        """Check liveness for a given set of frames"""
+    def get_session_results(self, session_id):
+        """Get results of a liveness session"""
         try:
-            processed_frames = []
-            for frame in frames:
-                # Convert base64 to bytes if needed
-                if isinstance(frame, str):
-                    if frame.startswith('data:image'):
-                        image_bytes = base64.b64decode(frame.split(',')[1])
-                    else:
-                        image_bytes = base64.b64decode(frame)
-                else:
-                    image_bytes = frame
-
-                processed_frames.append(image_bytes)
-
-            # Use detect_face_liveness
-            response = self.client.detect_face_liveness(
-                SessionId=session_id,
-                Image={'Bytes': processed_frames[0]}  # Use first frame
+            response = self.client.get_face_liveness_session_results(
+                SessionId=session_id
             )
-
-            # Determine liveness
-            is_live = response.get('Confidence', 0) > 90
+            confidence = response.get("Confidence")
+            status = response.get("Status")
             
+            logger.info(f'Session {session_id} - Confidence: {confidence}%, Status: {status}')
             return {
-                'status': 'success',
-                'isLive': is_live,
-                'confidence': response.get('Confidence', 0),
-                'sessionId': session_id
+                'confidence': confidence,
+                'status': status,
+                'isLive': confidence > 90 if confidence else False
             }
-
         except Exception as e:
-            logger.error(f"Error checking liveness frames: {str(e)}")
-            return {
-                'status': 'error',
-                'message': str(e),
-                'isLive': False,
-                'confidence': 0
-            }
+            logger.error(f"Error getting session results: {str(e)}")
+            raise
 
     def process_liveness_frames(self, session_id, frames):
-        """Process liveness detection frames"""
+        """Process multiple frames for liveness detection"""
         try:
-            processed_frames = []
+            # Process each frame
             for frame in frames:
-                # Convert base64 to bytes if needed
+                # Convert base64 frame to bytes if needed
                 if isinstance(frame, str):
                     if frame.startswith('data:image'):
                         image_bytes = base64.b64decode(frame.split(',')[1])
@@ -100,44 +79,17 @@ class AWSRekognition:
                 else:
                     image_bytes = frame
 
-                processed_frames.append(image_bytes)
+                # Update the liveness session with the frame
+                self.client.update_face_liveness_session(
+                    SessionId=session_id,
+                    Image={'Bytes': image_bytes}
+                )
 
-            # Use detect_face_liveness
-            response = self.client.detect_face_liveness(
-                SessionId=session_id,
-                Image={'Bytes': processed_frames[0]}  # Use first frame
-            )
-
-            # Determine liveness
-            is_live = response.get('Confidence', 0) > 90
-
-            # If liveness is confirmed, get the best frame
-            selfie_url = None
-            if is_live:
-                best_frame = self.get_best_frame(processed_frames)
-                
-                # Upload best frame to S3 if available
-                if best_frame:
-                    image_hash = self.generate_image_hash(best_frame)
-                    file_name = f'liveness/{image_hash}.jpg'
-                    selfie_url = self.upload_to_s3(best_frame, file_name)
-
-            return {
-                'status': 'success',
-                'isLive': is_live,
-                'confidence': response.get('Confidence', 0),
-                'sessionId': session_id,
-                'selfieUrl': selfie_url
-            }
-
+            # Get final results after processing all frames
+            return self.get_session_results(session_id)
         except Exception as e:
             logger.error(f"Error processing liveness frames: {str(e)}")
-            return {
-                'status': 'error',
-                'message': str(e),
-                'isLive': False,
-                'confidence': 0
-            }
+            raise
 
     def verify_face(self, image_bytes):
         try:
