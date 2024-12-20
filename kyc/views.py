@@ -1,3 +1,6 @@
+import boto3
+import base64
+import logging
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -5,8 +8,7 @@ from rest_framework.decorators import action
 from .models import KYC
 from .serializers import KYCSerializer, KYCVerificationSerializer
 from utils.aws_helper import AWSRekognition
-import logging
-import base64
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +21,10 @@ class KYCViewSet(viewsets.ModelViewSet):
     def start_liveness_session(self, request):
         """Start a new liveness detection session"""
         try:
-            logger.info(f"Starting liveness session for user: {request.user.id}")
             aws = AWSRekognition()
             session_id = aws.create_face_liveness_session()
             
-            logger.info(f"Created liveness session: {session_id}")
+            logger.info(f"Created liveness session for user: {request.user.id}")
             return Response({
                 'status': 'success',
                 'sessionId': session_id,
@@ -49,10 +50,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                     'message': 'Session ID and frames are required'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            logger.info(f"Checking liveness for session: {session_id}")
             aws = AWSRekognition()
-            
-            # Process liveness
             result = aws.check_liveness_frames(session_id, frames)
             
             return Response(result)
@@ -77,10 +75,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                     'message': 'Session ID and frames are required'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            logger.info(f"Processing liveness frames for session: {session_id}")
             aws = AWSRekognition()
-            
-            # Process frames for liveness
             result = aws.process_liveness_frames(session_id, frames)
             
             return Response(result)
