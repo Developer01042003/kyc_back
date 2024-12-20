@@ -1,0 +1,39 @@
+# Django and DRF
+Django
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+
+# AWS
+boto3
+django-storages
+
+# Image Processing
+Pillow
+
+# Environment Variables
+python-dotenv
+
+# Database
+psycopg2-binary  # For PostgreSQL support
+
+# Development Tools
+django-debug-toolbar
+black  # Code formatter
+flake8  # Code linter
+
+# Security
+django-filter
+django-guardian
+
+# Documentation
+drf-yasg  # Swagger/OpenAPI documentation
+
+# Testing
+pytest
+pytest-django
+coverage
+
+# Production
+gunicorn
+whitenoise  # Static files serving
