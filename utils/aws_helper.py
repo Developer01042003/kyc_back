@@ -3,6 +3,7 @@ import hashlib
 import time
 from django.conf import settings
 import logging
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,51 @@ class AWSRekognition:
             except Exception as e:
                 logger.error(f"Error creating collection: {str(e)}")
                 raise
+
+    def create_face_liveness_session(self):
+        """Create a new face liveness session"""
+        try:
+            response = self.client.create_face_liveness_session()
+            logger.info("Created face liveness session")
+            return response['SessionId']
+        except Exception as e:
+            logger.error(f"Error creating liveness session: {str(e)}")
+            raise
+
+    def process_liveness_frames(self, session_id, frames):
+        """Process multiple frames for liveness detection"""
+        try:
+            # Process each frame
+            for frame in frames:
+                # Convert base64 frame to bytes if needed
+                if isinstance(frame, str) and frame.startswith('data:image'):
+                    image_bytes = base64.b64decode(frame.split(',')[1])
+                else:
+                    image_bytes = frame
+
+                # Update the liveness session with each frame
+                self.client.update_face_liveness_session(
+                    SessionId=session_id,
+                    Image={
+                        'Bytes': image_bytes
+                    }
+                )
+
+            # Get final results
+            result = self.client.get_face_liveness_session_results(
+                SessionId=session_id
+            )
+
+            logger.info(f"Liveness check completed with confidence: {result['Confidence']}")
+            
+            return {
+                'isLive': result['Confidence'] > 90,
+                'confidence': result['Confidence'],
+                'sessionId': session_id
+            }
+        except Exception as e:
+            logger.error(f"Error processing liveness frames: {str(e)}")
+            raise
 
     def verify_face(self, image_bytes):
         try:
@@ -87,4 +133,36 @@ class AWSRekognition:
             return f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com/{file_name}"
         except Exception as e:
             logger.error(f"Error uploading to S3: {str(e)}")
+            return None
+
+    def get_best_frame(self, frames):
+        """Select the best frame from the liveness sequence"""
+        try:
+            best_quality = 0
+            best_frame = None
+
+            for frame in frames:
+                # Convert base64 to bytes if needed
+                if isinstance(frame, str) and frame.startswith('data:image'):
+                    image_bytes = base64.b64decode(frame.split(',')[1])
+                else:
+                    image_bytes = frame
+
+                # Analyze face quality
+                response = self.client.detect_faces(
+                    Image={'Bytes': image_bytes},
+                    Attributes=['QUALITY']
+                )
+
+                if response['FaceDetails']:
+                    quality = response['FaceDetails'][0]['Quality']['Brightness'] + \
+                             response['FaceDetails'][0]['Quality']['Sharpness']
+                    
+                    if quality > best_quality:
+                        best_quality = quality
+                        best_frame = image_bytes
+
+            return best_frame
+        except Exception as e:
+            logger.error(f"Error selecting best frame: {str(e)}")
             return None
