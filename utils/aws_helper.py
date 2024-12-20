@@ -38,9 +38,7 @@ class AWSRekognition:
     def create_face_liveness_session(self):
         """Create a new face liveness session"""
         try:
-            response = self.client.create_face_liveness_session(
-                ClientRequestToken=str(int(time.time()))
-            )
+            response = self.client.create_face_liveness_session()
             logger.info("Created face liveness session")
             return response['SessionId']
         except Exception as e:
@@ -61,28 +59,21 @@ class AWSRekognition:
                 else:
                     image_bytes = frame
 
-                # Update liveness session with each frame
-                try:
-                    self.client.update_face_liveness_session(
-                        SessionId=session_id,
-                        Image={'Bytes': image_bytes}
-                    )
-                    processed_frames.append(image_bytes)
-                except Exception as frame_error:
-                    logger.warning(f"Error processing frame: {str(frame_error)}")
+                processed_frames.append(image_bytes)
 
-            # Get final liveness session results
-            result = self.client.get_face_liveness_session_results(
-                SessionId=session_id
+            # Use detect_face_liveness
+            response = self.client.detect_face_liveness(
+                SessionId=session_id,
+                Image={'Bytes': processed_frames[0]}  # Use first frame
             )
 
-            # Determine liveness based on confidence
-            is_live = result.get('Confidence', 0) > 90
+            # Determine liveness
+            is_live = response.get('Confidence', 0) > 90
             
             return {
                 'status': 'success',
                 'isLive': is_live,
-                'confidence': result.get('Confidence', 0),
+                'confidence': response.get('Confidence', 0),
                 'sessionId': session_id
             }
 
@@ -109,23 +100,16 @@ class AWSRekognition:
                 else:
                     image_bytes = frame
 
-                # Update liveness session
-                try:
-                    self.client.update_face_liveness_session(
-                        SessionId=session_id,
-                        Image={'Bytes': image_bytes}
-                    )
-                    processed_frames.append(image_bytes)
-                except Exception as frame_error:
-                    logger.warning(f"Error processing frame: {str(frame_error)}")
+                processed_frames.append(image_bytes)
 
-            # Get final liveness session results
-            result = self.client.get_face_liveness_session_results(
-                SessionId=session_id
+            # Use detect_face_liveness
+            response = self.client.detect_face_liveness(
+                SessionId=session_id,
+                Image={'Bytes': processed_frames[0]}  # Use first frame
             )
 
             # Determine liveness
-            is_live = result.get('Confidence', 0) > 90
+            is_live = response.get('Confidence', 0) > 90
 
             # If liveness is confirmed, get the best frame
             selfie_url = None
@@ -141,7 +125,7 @@ class AWSRekognition:
             return {
                 'status': 'success',
                 'isLive': is_live,
-                'confidence': result.get('Confidence', 0),
+                'confidence': response.get('Confidence', 0),
                 'sessionId': session_id,
                 'selfieUrl': selfie_url
             }
