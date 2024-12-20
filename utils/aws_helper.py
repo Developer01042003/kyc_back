@@ -2,6 +2,9 @@ import boto3
 import hashlib
 import time
 from django.conf import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AWSRekognition:
     def __init__(self):
@@ -16,16 +19,22 @@ class AWSRekognition:
             region_name=settings.AWS_S3_REGION_NAME
         )
         self.collection_id = 'unique_faces'
+        self._ensure_collection_exists()  # Check collection on initialization
 
-    def create_collection(self):
+    def _ensure_collection_exists(self):
+        """Ensure collection exists, create if it doesn't"""
         try:
-            self.client.create_collection(CollectionId=self.collection_id)
-            return True
-        except self.client.exceptions.ResourceAlreadyExistsException:
-            return True
-        except Exception as e:
-            print(f"Error creating collection: {str(e)}")
-            return False
+            # Try to describe the collection
+            self.client.describe_collection(CollectionId=self.collection_id)
+            logger.info(f"Collection {self.collection_id} exists")
+        except self.client.exceptions.ResourceNotFoundException:
+            # Collection doesn't exist, create it
+            try:
+                self.client.create_collection(CollectionId=self.collection_id)
+                logger.info(f"Created collection {self.collection_id}")
+            except Exception as e:
+                logger.error(f"Error creating collection: {str(e)}")
+                raise
 
     def verify_face(self, image_bytes):
         try:
@@ -35,7 +44,7 @@ class AWSRekognition:
             )
             return len(response['FaceDetails']) == 1
         except Exception as e:
-            print(f"Error verifying face: {str(e)}")
+            logger.error(f"Error verifying face: {str(e)}")
             return False
 
     def check_face_duplicate(self, image_bytes):
@@ -48,7 +57,7 @@ class AWSRekognition:
             )
             return len(response['FaceMatches']) > 0
         except Exception as e:
-            print(f"Error checking face duplicate: {str(e)}")
+            logger.error(f"Error checking face duplicate: {str(e)}")
             return False
 
     def index_face(self, image_bytes):
@@ -61,7 +70,7 @@ class AWSRekognition:
             )
             return response['FaceRecords'][0]['Face']['FaceId']
         except Exception as e:
-            print(f"Error indexing face: {str(e)}")
+            logger.error(f"Error indexing face: {str(e)}")
             return None
 
     def generate_image_hash(self, image_bytes):
@@ -77,5 +86,5 @@ class AWSRekognition:
             )
             return f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com/{file_name}"
         except Exception as e:
-            print(f"Error uploading to S3: {str(e)}")
+            logger.error(f"Error uploading to S3: {str(e)}")
             return None
