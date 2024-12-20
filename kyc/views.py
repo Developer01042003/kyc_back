@@ -7,7 +7,6 @@ from .serializers import KYCSerializer, KYCVerificationSerializer
 from utils.aws_helper import AWSRekognition
 import logging
 import base64
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -53,21 +52,10 @@ class KYCViewSet(viewsets.ModelViewSet):
             logger.info(f"Checking liveness for session: {session_id}")
             aws = AWSRekognition()
             
-            # Decode base64 frames
-            decoded_frames = [
-                base64.b64decode(frame.split(',')[1] if ',' in frame else frame) 
-                for frame in frames
-            ]
+            # Process liveness
+            result = aws.check_liveness_frames(session_id, frames)
             
-            # Perform liveness check
-            result = aws.check_liveness_frames(session_id, decoded_frames)
-            
-            return Response({
-                'status': 'success',
-                'isLive': result.get('isLive', False),
-                'confidence': result.get('confidence', 0),
-                'message': 'Liveness check completed'
-            })
+            return Response(result)
 
         except Exception as e:
             logger.error(f"Error checking liveness: {str(e)}")
@@ -92,42 +80,10 @@ class KYCViewSet(viewsets.ModelViewSet):
             logger.info(f"Processing liveness frames for session: {session_id}")
             aws = AWSRekognition()
             
-            # Decode base64 frames
-            decoded_frames = [
-                base64.b64decode(frame.split(',')[1] if ',' in frame else frame) 
-                for frame in frames
-            ]
-            
             # Process frames for liveness
-            result = aws.process_liveness_frames(session_id, decoded_frames)
+            result = aws.process_liveness_frames(session_id, frames)
             
-            if result.get('isLive', False):
-                # Get the best frame for face verification
-                best_frame = aws.get_best_frame(decoded_frames)
-                if best_frame:
-                    # Store the best frame or use it for further verification
-                    image_hash = aws.generate_image_hash(best_frame)
-                    file_name = f'liveness/{image_hash}.jpg'
-                    selfie_url = aws.upload_to_s3(best_frame, file_name)
-
-                    if selfie_url:
-                        # Create or update KYC record
-                        kyc, created = KYC.objects.get_or_create(
-                            user=request.user,
-                            defaults={
-                                'selfie_url': selfie_url,
-                                'is_verified': True
-                            }
-                        )
-                        if not created:
-                            kyc.selfie_url = selfie_url
-                            kyc.is_verified = True
-                            kyc.save()
-
-            return Response({
-                'status': 'success',
-                'data': result
-            })
+            return Response(result)
 
         except Exception as e:
             logger.error(f"Error processing liveness: {str(e)}")
