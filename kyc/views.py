@@ -1,13 +1,10 @@
 # views.py
 from rest_framework import viewsets, status
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
+from rest_framework.response import Response
 from .models import KYC
 from .serializers import KYCSerializer, KYCVerificationSerializer
 from utils.aws_helper import AWSRekognition
-import base64
-import json
 
 class KYCViewSet(viewsets.ModelViewSet):
     queryset = KYC.objects.all()
@@ -16,6 +13,7 @@ class KYCViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def start_liveness_session(self, request):
+        """Start a new liveness detection session"""
         try:
             aws = AWSRekognition()
             session_id = aws.create_face_liveness_session()
@@ -29,31 +27,40 @@ class KYCViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def check_liveness(self, request):
+        """Process frames for liveness detection"""
         try:
-            aws = AWSRekognition()
             session_id = request.data.get('sessionId')
             frames = request.data.get('frames')
 
-            liveness_result = aws.check_face_liveness(session_id, frames)
-            return Response(liveness_result)
+            if not session_id or not frames:
+                return Response({
+                    'error': 'Missing sessionId or frames'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            aws = AWSRekognition()
+            result = aws.process_liveness_frames(session_id, frames)
+
+            if result['isLive']:
+                # Get best frame for KYC
+                best_frame = aws.get_best_frame(frames)
+                if best_frame:
+                    result['bestFrame'] = best_frame
+
+            return Response(result)
         except Exception as e:
             return Response({
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    # Your existing create method remains the same
     def create(self, request):
         serializer = KYCVerificationSerializer(data=request.data)
         if serializer.is_valid():
             aws = AWSRekognition()
             
-            # Get base64 image and convert to bytes
-            image_data = serializer.validated_data['selfie']
-            if isinstance(image_data, str) and image_data.startswith('data:image'):
-                # Handle base64 string from frontend
-                image_bytes = base64.b64decode(image_data.split(',')[1])
-            else:
-                # Handle file upload
-                image_bytes = image_data.read()
+            # Read image file
+            image_file = serializer.validated_data['selfie']
+            image_bytes = image_file.read()
 
             # Verify face
             if not aws.verify_face(image_bytes):
