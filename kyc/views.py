@@ -1,14 +1,10 @@
-import boto3
-import base64
-import logging
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from .models import KYC
-from .serializers import KYCSerializer, KYCVerificationSerializer
+from .serializers import KYCSerializer
 from utils.aws_helper import AWSRekognition
-from django.conf import settings
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -37,31 +33,6 @@ class KYCViewSet(viewsets.ModelViewSet):
                 'message': f'Failed to create liveness session: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=False, methods=['post'], url_path='check-liveness')
-    def check_liveness(self, request):
-        """Check liveness for a given session"""
-        try:
-            session_id = request.data.get('sessionId')
-            frames = request.data.get('frames', [])
-
-            if not session_id or not frames:
-                return Response({
-                    'status': 'error',
-                    'message': 'Session ID and frames are required'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            aws = AWSRekognition()
-            result = aws.check_liveness_frames(session_id, frames)
-            
-            return Response(result)
-
-        except Exception as e:
-            logger.error(f"Error checking liveness: {str(e)}")
-            return Response({
-                'status': 'error',
-                'message': f'Failed to check liveness: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
     @action(detail=False, methods=['post'], url_path='process-liveness')
     def process_liveness(self, request):
         """Process liveness detection frames"""
@@ -78,7 +49,12 @@ class KYCViewSet(viewsets.ModelViewSet):
             aws = AWSRekognition()
             result = aws.process_liveness_frames(session_id, frames)
             
-            return Response(result)
+            return Response({
+                'status': 'success',
+                'isLive': result['isLive'],
+                'confidence': result['confidence'],
+                'sessionStatus': result['status']
+            })
 
         except Exception as e:
             logger.error(f"Error processing liveness: {str(e)}")
@@ -87,21 +63,32 @@ class KYCViewSet(viewsets.ModelViewSet):
                 'message': f'Failed to process liveness: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=False, methods=['get'], url_path='liveness-status')
-    def get_liveness_status(self, request):
-        """Get the current liveness verification status"""
+    @action(detail=False, methods=['get'], url_path='session-results')
+    def get_session_results(self, request):
+        """Get results of a liveness session"""
         try:
-            kyc = KYC.objects.filter(user=request.user).first()
+            session_id = request.query_params.get('sessionId')
+            if not session_id:
+                return Response({
+                    'status': 'error',
+                    'message': 'Session ID is required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            aws = AWSRekognition()
+            result = aws.get_session_results(session_id)
+            
             return Response({
                 'status': 'success',
-                'isVerified': bool(kyc and kyc.is_verified),
-                'selfieUrl': kyc.selfie_url if kyc else None
+                'isLive': result['isLive'],
+                'confidence': result['confidence'],
+                'sessionStatus': result['status']
             })
+
         except Exception as e:
-            logger.error(f"Error getting liveness status: {str(e)}")
+            logger.error(f"Error getting session results: {str(e)}")
             return Response({
                 'status': 'error',
-                'message': f'Failed to get liveness status: {str(e)}'
+                'message': f'Failed to get session results: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def create(self, request):
