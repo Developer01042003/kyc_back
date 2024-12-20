@@ -1,10 +1,16 @@
+# kyc/views.py
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from .models import KYC
-from .serializers import KYCSerializer, KYCVerificationSerializer
+from .serializers import KYCSerializer
 from utils.aws_helper import AWSRekognition
+import logging
+import json
+import base64
+
+logger = logging.getLogger(__name__)
 
 class KYCViewSet(viewsets.ModelViewSet):
     queryset = KYC.objects.all()
