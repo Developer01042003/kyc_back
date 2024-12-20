@@ -92,7 +92,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                 'message': f'Failed to process liveness: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=False, methods=['get'], url_path='liveness-status')
+    @action(detail=False, methods=['post'], url_path='liveness-status')
     def get_liveness_status(self, request):
         """Get the current liveness verification status"""
         try:
