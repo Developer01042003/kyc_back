@@ -18,52 +18,70 @@ class KYCViewSet(viewsets.ModelViewSet):
     def start_liveness_session(self, request):
         """Start a new liveness detection session"""
         try:
+            # Log the request
+            logger.info(f"Starting liveness session for user: {request.user.id}")
+            
+            # Initialize AWS Rekognition
             aws = AWSRekognition()
+            
+            # Create session
             session_id = aws.create_face_liveness_session()
             
-            logger.info(f"Created liveness session for user: {request.user.id}")
+            logger.info(f"Created liveness session: {session_id}")
+            
             return Response({
                 'status': 'success',
                 'sessionId': session_id,
                 'message': 'Liveness session created successfully'
             })
+            
         except Exception as e:
+            # Log the full error
             logger.error(f"Error creating liveness session: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
             return Response({
                 'status': 'error',
-                'message': f'Failed to create liveness session: {str(e)}'
+                'message': f'Failed to create liveness session: {str(e)}',
+                'detail': traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'], url_path='process-liveness')
     def process_liveness(self, request):
         """Process liveness detection frames"""
         try:
+            # Get request data
             session_id = request.data.get('sessionId')
             frames = request.data.get('frames', [])
 
+            # Validate input
             if not session_id or not frames:
                 return Response({
                     'status': 'error',
                     'message': 'Session ID and frames are required'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
+            # Log processing attempt
+            logger.info(f"Processing liveness for session: {session_id}")
+
+            # Process frames
             aws = AWSRekognition()
             result = aws.process_liveness_frames(session_id, frames)
             
             return Response({
                 'status': 'success',
-                'isLive': result['isLive'],
-                'confidence': result['confidence'],
-                'sessionStatus': result['status']
+                'data': result
             })
 
         except Exception as e:
             logger.error(f"Error processing liveness: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
             return Response({
                 'status': 'error',
-                'message': f'Failed to process liveness: {str(e)}'
+                'message': f'Failed to process liveness: {str(e)}',
+                'detail': traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
     @action(detail=False, methods=['get'], url_path='session-results')
     def get_session_results(self, request):
         """Get results of a liveness session"""
