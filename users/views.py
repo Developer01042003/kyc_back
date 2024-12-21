@@ -1,3 +1,4 @@
+# views.py
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -11,41 +12,39 @@ class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
 
-    @action(detail=False, methods=['post'],permission_classes=[AllowAny])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def signup(self, request):
         serializer = UserSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
-            refresh = RefreshToken.for_user(user)
+            # Changed to match frontend's expected token format
+            token = RefreshToken.for_user(user)
             return Response({
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
+                'token': str(token.access_token),  # Changed from 'access' to 'token'
                 'user': serializer.data
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=False, methods=['post'],permission_classes=[AllowAny])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def login(self, request):
         serializer = UserLoginSerializer(data=request.data)
         if serializer.is_valid():
             email = serializer.validated_data['email']
             password = serializer.validated_data['password']
             
-            # Get user by email
             try:
                 user = User.objects.get(email=email)
             except User.DoesNotExist:
                 return Response({
-                    'error': 'No user found with this email'
-                }, status=status.HTTP_404_NOT_FOUND)
+                    'error': 'Invalid credentials'  # Generic error message for security
+                }, status=status.HTTP_401_UNAUTHORIZED)
 
-            # Authenticate user
             user = authenticate(username=user.username, password=password)
             if user:
-                refresh = RefreshToken.for_user(user)
+                # Changed to match frontend's expected token format
+                token = RefreshToken.for_user(user)
                 return Response({
-                    'refresh': str(refresh),
-                    'access': str(refresh.access_token),
+                    'token': str(token.access_token),  # Changed from 'access' to 'token'
                     'user': UserSerializer(user).data
                 })
             return Response({
