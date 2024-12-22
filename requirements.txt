@@ -10,7 +10,7 @@ django-storages
 
 # Image Processing
 Pillow
-opencv
+opencv-python==4.4.0
 dlib
 
 # Environment Variables
