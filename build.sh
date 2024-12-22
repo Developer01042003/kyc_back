@@ -10,7 +10,8 @@ python -m pip install --upgrade pip
 # Ensure that any necessary dependencies are already available in the platform environment
 
 # Install dlib - Using precompiled wheels to avoid memory issues (alternative option)
-pip install dlib --no-cache-dir
+pip install --no-binary :all: dlib
+
 
 # Install dependencies from requirements.txt
 pip install -r requirements.txt
