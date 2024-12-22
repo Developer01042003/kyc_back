@@ -6,19 +6,24 @@ set -o nounset  # To exit on unset variables
 # Upgrade pip
 python -m pip install --upgrade pip
 
-# Install dependencies
+# Install system dependencies for dlib compilation
+sudo apt-get update
+sudo apt-get install -y build-essential cmake libopenblas-dev liblapack-dev
+
+# Install dlib - Using precompiled wheels to avoid memory issues (alternative option)
+pip install dlib --no-cache-dir
+
+# Install dependencies from requirements.txt
 pip install -r requirements.txt
 
 # Create necessary directories
 mkdir -p static staticfiles media
 
-
-
 # Make fresh migrations
-python manage.py makemigrations  --noinput
+python manage.py makemigrations --noinput
 
 # Apply migrations
-python manage.py migrate  --noinput
+python manage.py migrate --noinput
 
 # Collect static files
 python manage.py collectstatic --noinput --clear
@@ -33,4 +38,5 @@ python manage.py createsuperuser --noinput \
     --username "$DJANGO_SUPERUSER_USERNAME" \
     --email "$DJANGO_SUPERUSER_EMAIL" || echo "Superuser creation skipped due to existing username."
 
+# Display completion message
 echo "Build completed successfully!"
