@@ -152,67 +152,74 @@ class KYCViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def process_video(self, video_path):
-        """Process the video and return liveness status, eye-open frame, and glare detection."""
-        with mp_face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection, \
-             mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
+    """Process the video and return liveness status, eye-open frame, and glare detection."""
+    with mp_face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection, \
+         mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
 
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                raise ValueError("Unable to open video file")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError("Unable to open video file")
 
-            EAR_THRESHOLD = 0.25
-            BLINK_COUNT = 0
-            eye_open_frame = None
-            glare_detected = False
-            FRAME_COUNT = 0
+        EAR_THRESHOLD = 0.3
+        BLINK_COUNT = 0
+        eye_open_frame = None
+        glare_detected = False
 
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                face_results = face_detection.process(rgb_frame)
+            # Preprocess frame to make it square
+            square_frame = self.crop_to_square(frame)  # Crop to square
+            rgb_frame = cv2.cvtColor(square_frame, cv2.COLOR_BGR2RGB)
 
-                if face_results.detections:
-                    mesh_results = face_mesh.process(rgb_frame)
-                    if mesh_results.multi_face_landmarks:
-                        for face_landmarks in mesh_results.multi_face_landmarks:
-                            landmarks = [(int(landmark.x * frame.shape[1]),
-                                          int(landmark.y * frame.shape[0]))
-                                         for landmark in face_landmarks.landmark]
+            # Detect faces
+            face_results = face_detection.process(rgb_frame)
+            if face_results.detections:
+                mesh_results = face_mesh.process(rgb_frame)
 
-                            left_eye_indices = [33, 133, 153, 154, 133, 33]
-                            right_eye_indices = [362, 263, 362, 467, 463, 362]
+                if mesh_results.multi_face_landmarks:
+                    for face_landmarks in mesh_results.multi_face_landmarks:
+                        # Extract landmark coordinates
+                        landmarks = [
+                            (int(landmark.x * square_frame.shape[1]),
+                             int(landmark.y * square_frame.shape[0]))
+                            for landmark in face_landmarks.landmark
+                        ]
 
-                            left_ear = self.calculate_ear(landmarks, left_eye_indices)
-                            right_ear = self.calculate_ear(landmarks, right_eye_indices)
+                        # Calculate Eye Aspect Ratio (EAR)
+                        left_ear = self.calculate_ear(landmarks, [33, 133, 153, 154, 133, 33])
+                        right_ear = self.calculate_ear(landmarks, [362, 263, 362, 467, 463, 362])
 
-                            if left_ear > EAR_THRESHOLD or right_ear > EAR_THRESHOLD:
-                                if eye_open_frame is None:
-                                    eye_open_frame = frame
+                        if left_ear > EAR_THRESHOLD or right_ear > EAR_THRESHOLD:
+                            if eye_open_frame is None:
+                                eye_open_frame = frame
 
-                            if left_ear < EAR_THRESHOLD and right_ear < EAR_THRESHOLD:
-                                FRAME_COUNT += 1
-                            else:
-                                FRAME_COUNT = 0
+                        if left_ear < EAR_THRESHOLD and right_ear < EAR_THRESHOLD:
+                            BLINK_COUNT += 1
 
-                            if FRAME_COUNT > 2:  # Require 2 consecutive frames for a blink
-                                BLINK_COUNT += 1
-                                break
+            # Detect glare
+            if self.detect_glare(square_frame):
+                glare_detected = True
 
-                if self.detect_glare(frame):
-                    glare_detected = True
+        cap.release()
 
-            cap.release()
+        is_live = BLINK_COUNT >= 1
+        if eye_open_frame is not None:
+            _, buffer = cv2.imencode(".jpg", eye_open_frame)
+            eye_open_image_bytes = BytesIO(buffer.tobytes())
+            return is_live, eye_open_image_bytes, glare_detected
 
-            is_live = BLINK_COUNT >= 1
-            if eye_open_frame is not None:
-                _, buffer = cv2.imencode(".jpg", eye_open_frame)
-                eye_open_image_bytes = BytesIO(buffer.tobytes())
-                return is_live, eye_open_image_bytes, glare_detected
+        return is_live, None, glare_detected
 
-            return is_live, None, glare_detected
+    def crop_to_square(self, frame):
+       """Crop the frame to make it square."""
+       height, width, _ = frame.shape
+       size = min(height, width)
+       start_x = (width - size) // 2
+       start_y = (height - size) // 2
+       return frame[start_y:start_y + size, start_x:start_x + size]
 
     def calculate_ear(self, landmarks, eye_indices):
         """Calculate Eye Aspect Ratio (EAR)"""
