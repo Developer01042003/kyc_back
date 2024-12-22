@@ -10,7 +10,7 @@ python -m pip install --upgrade pip
 # Ensure that any necessary dependencies are already available in the platform environment
 
 # Install dlib - Using precompiled wheels to avoid memory issues (alternative option)
-pip install dlib --no-cache-dir --global-option="build_ext" --global-option="--no-cuda"
+
 
 
 
