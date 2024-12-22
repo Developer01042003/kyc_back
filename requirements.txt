@@ -10,6 +10,8 @@ django-storages
 
 # Image Processing
 Pillow
+opencv
+dlib
 
 # Environment Variables
 python-dotenv
