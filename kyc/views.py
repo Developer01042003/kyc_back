@@ -148,6 +148,156 @@ class KYCViewSet(viewsets.ModelViewSet):
                 'message': f'KYC creation failed: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    import logging
+import cv2
+import mediapipe as mp
+import numpy as np
+from django.core.files.uploadedfile import SimpleUploadedFile
+from io import BytesIO
+import os
+
+from rest_framework import viewsets, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from .models import KYC
+from .serializers import KYCSerializer
+from .serializers import KYCVerificationSerializer
+from utils.aws_helper import AWSRekognition
+
+logger = logging.getLogger(__name__)
+
+# Initialize MediaPipe Face Detection and Landmark Model
+mp_face_detection = mp.solutions.face_detection
+mp_face_mesh = mp.solutions.face_mesh
+face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.2)
+face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.2, min_tracking_confidence=0.2)
+
+class KYCViewSet(viewsets.ModelViewSet):
+    queryset = KYC.objects.all()
+    serializer_class = KYCSerializer
+    permission_classes = [IsAuthenticated]
+
+    def create(self, request):
+        """Create a new KYC record with selfie verification"""
+        try:
+            # Extract video file from the request
+            video_file = request.FILES.get("video")
+            if not video_file:
+                return Response({
+                    'status': 'error',
+                    'message': 'No video provided'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Process the video to check liveness and glare
+            video_path = "temp_video.webm"
+            with open(video_path, "wb") as f:
+                f.write(video_file.read())
+
+            is_live, eye_open_image, glare_detected = self.process_video(video_path)
+
+            # Handle glare detection
+            if glare_detected:
+                os.remove(video_path)
+                return Response({
+                    'status': 'error',
+                    'message': 'Glare detected in video, please try again.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Handle liveness failure
+            if not is_live or eye_open_image is None:
+                os.remove(video_path)
+                return Response({
+                    'status': 'error',
+                    'message': 'Liveness check failed. Please try again.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Convert eye-open image to Django `UploadedFile`
+            eye_open_image.seek(0)
+            selfie_file = SimpleUploadedFile("eye_open_selfie.jpg", eye_open_image.read(), content_type="image/jpeg")
+
+            # Now pass the selfie image to the serializer
+            serializer = KYCVerificationSerializer(data={'selfie': selfie_file})
+            if serializer.is_valid():
+                aws = AWSRekognition()
+
+                # Read image file
+                image_file = serializer.validated_data['selfie']
+                image_bytes = image_file.read()
+
+                # Verify face
+                if not aws.verify_face(image_bytes):
+                    os.remove(video_path)
+                    return Response({
+                        'status': 'error',
+                        'message': 'Invalid face image'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Check for duplicates
+                if aws.check_face_duplicate(image_bytes):
+                    os.remove(video_path)
+                    return Response({
+                        'status': 'error',
+                        'message': 'Face already exists'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Generate image hash and upload to S3
+                image_hash = aws.generate_image_hash(image_bytes)
+                file_name = f'selfies/{image_hash}.jpg'
+                selfie_url = aws.upload_to_s3(image_bytes, file_name)
+
+                if not selfie_url:
+                    os.remove(video_path)
+                    return Response({
+                        'status': 'error',
+                        'message': 'Error uploading image'
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+                # Index face
+                face_id = aws.index_face(image_bytes)
+                if not face_id:
+                    os.remove(video_path)
+                    return Response({
+                        'status': 'error',
+                        'message': 'Error indexing face'
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+                # Create KYC record
+                kyc = KYC.objects.create(
+                    user=request.user,
+                    selfie_url=selfie_url,
+                    face_id=face_id,
+                    is_verified=True
+                )
+
+                # Update user verification status
+                request.user.is_verified = True
+                request.user.save()
+
+                # Clean up: delete video and image from the backend
+                os.remove(video_path)  # Delete video after processing
+                self.cleanup_image(image_bytes)  # Delete image after upload to S3
+
+                return Response(
+                    KYCSerializer(kyc).data,
+                    status=status.HTTP_201_CREATED
+                )
+
+            # If serializer is not valid
+            os.remove(video_path)
+            return Response({
+                'status': 'error',
+                'message': 'Invalid data',
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            logger.error(f"KYC creation error: {str(e)}")
+            os.remove(video_path)
+            return Response({
+                'status': 'error',
+                'message': f'KYC creation failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     def process_video(self, video_path):
         """Process the video and return liveness status, eye-open frame, and glare detection."""
         cap = cv2.VideoCapture(video_path)
@@ -198,6 +348,32 @@ class KYCViewSet(viewsets.ModelViewSet):
             return is_live, eye_open_image_bytes, glare_detected
 
         return is_live, None, glare_detected
+
+    def extract_eye_aspect_ratio(self, landmarks, eye_points):
+        """Calculate the Eye Aspect Ratio (EAR)."""
+        def euclidean_distance(point1, point2):
+            return ((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)**0.5
+
+        A = euclidean_distance(landmarks[eye_points[1]], landmarks[eye_points[5]])
+        B = euclidean_distance(landmarks[eye_points[2]], landmarks[eye_points[4]])
+        C = euclidean_distance(landmarks[eye_points[0]], landmarks[eye_points[3]])
+        return (A + B) / (2.0 * C)
+
+    def check_for_glare(self, frame):
+        """Detect glare in the frame based on brightness levels."""
+        # Convert frame to grayscale and calculate its brightness
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        mean_brightness = np.mean(gray)
+
+        # If the mean brightness is above a threshold, glare is likely present
+        return mean_brightness > 200  # Threshold for glare (adjust as needed)
+
+    def cleanup_image(self, image_bytes):
+        """Clean up the uploaded image after it's uploaded to S3."""
+        try:
+            image_bytes.close()  # Close the image file to free up resources
+        except Exception as e:
+            logger.error(f"Error cleaning up image: {str(e)}")
 
     def extract_eye_aspect_ratio(self, landmarks, eye_points):
         """Calculate the Eye Aspect Ratio (EAR)."""
