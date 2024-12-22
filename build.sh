@@ -6,9 +6,8 @@ set -o nounset  # To exit on unset variables
 # Upgrade pip
 python -m pip install --upgrade pip
 
-# Install system dependencies for dlib compilation
-sudo apt-get update
-sudo apt-get install -y build-essential cmake libopenblas-dev liblapack-dev
+# Install system dependencies for dlib compilation (skip sudo)
+# Ensure that any necessary dependencies are already available in the platform environment
 
 # Install dlib - Using precompiled wheels to avoid memory issues (alternative option)
 pip install dlib --no-cache-dir
