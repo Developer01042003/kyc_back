@@ -30,10 +30,14 @@ class KYCViewSet(viewsets.ModelViewSet):
             # Extract video file from the request
             video_file = request.FILES.get("video")
             if not video_file:
+                logger.error("No video file provided in the request.")
                 return Response({
                     'status': 'error',
                     'message': 'No video provided'
                 }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Log video file details
+            logger.info(f"Received video file: {video_file.name}, size: {video_file.size} bytes")
 
             # Save video locally for processing
             video_path = "temp_video.webm"
@@ -44,12 +48,14 @@ class KYCViewSet(viewsets.ModelViewSet):
                 is_live, eye_open_image, _ = self.process_video(video_path)
             except Exception as processing_error:
                 logger.error(f"Video processing error: {str(processing_error)}")
+                os.remove(video_path)
                 return Response({
                     'status': 'error',
                     'message': 'Error processing video'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             if not is_live or eye_open_image is None:
+                logger.warning("Liveness check failed.")
                 os.remove(video_path)
                 return Response({
                     'status': 'error',
@@ -67,6 +73,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                 image_bytes = image_file.read()
 
                 if not aws.verify_face(image_bytes):
+                    logger.warning("AWS Rekognition failed to verify face.")
                     os.remove(video_path)
                     return Response({
                         'status': 'error',
@@ -74,6 +81,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                     }, status=status.HTTP_400_BAD_REQUEST)
 
                 if aws.check_face_duplicate(image_bytes):
+                    logger.warning("Duplicate face detected.")
                     os.remove(video_path)
                     return Response({
                         'status': 'error',
@@ -85,6 +93,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                 selfie_url = aws.upload_to_s3(image_bytes, file_name)
 
                 if not selfie_url:
+                    logger.error("Error uploading image to S3.")
                     os.remove(video_path)
                     return Response({
                         'status': 'error',
@@ -93,6 +102,7 @@ class KYCViewSet(viewsets.ModelViewSet):
 
                 face_id = aws.index_face(image_bytes)
                 if not face_id:
+                    logger.error("Error indexing face with AWS Rekognition.")
                     os.remove(video_path)
                     return Response({
                         'status': 'error',
@@ -116,6 +126,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_201_CREATED
                 )
 
+            logger.error(f"Invalid data: {serializer.errors}")
             os.remove(video_path)
             return Response({
                 'status': 'error',
@@ -131,14 +142,13 @@ class KYCViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def process_video(self, video_path):
-        """Process the video to check for liveness through simple blink and movement detection."""
+        """Process the video to check for liveness through blink detection."""
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError("Unable to open video file")
 
         # Initialize variables for liveness
         blink_detected = False
-        movement_detected = False
 
         with mp_face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection, \
              mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, min_detection_confidence=0.5) as face_mesh:
@@ -154,23 +164,22 @@ class KYCViewSet(viewsets.ModelViewSet):
 
                 if face_results.detections and mesh_results.multi_face_landmarks:
                     for face_landmarks in mesh_results.multi_face_landmarks:
-                        # Use landmarks to detect simple blink/movement
+                        # Use landmarks to detect a blink
                         landmarks = [(int(l.x * frame.shape[1]), int(l.y * frame.shape[0])) for l in face_landmarks.landmark]
 
-                        # Example: Check simple movement by comparing the landmarks over frames
-                        if self.detect_blink(landmarks) or self.detect_simple_movement(landmarks):
+                        # Implement actual logic for blink detection
+                        if self.detect_blink(landmarks):
                             blink_detected = True
-                            movement_detected = True
                             break
 
-                # Break early if both checks are satisfied
-                if blink_detected and movement_detected:
+                # Break early if a blink is detected
+                if blink_detected:
                     break
 
         cap.release()
 
         # Define liveness based on detected actions
-        is_live = blink_detected and movement_detected
+        is_live = blink_detected
         return is_live, None, False  # Simplifying by ignoring glare detection for now
 
     def detect_blink(self, landmarks):
@@ -179,12 +188,6 @@ class KYCViewSet(viewsets.ModelViewSet):
         # This is pseudo logic. Real implementation requires continuous landmark tracking
         # Check landmark positions and identify rapid changes indicative of blink
         return True  # Return true if a blink is detected
-
-    def detect_simple_movement(self, landmarks):
-        """Basic head movement detection."""
-        # Implement logic to check changes in specific landmark positions frame-to-frame
-        # Pseudo logic to place for head movement detection
-        return True  # Return true if significant head movement is detected
 
     def cleanup_image(self, image_bytes):
         """Clean up the uploaded image after processing"""
