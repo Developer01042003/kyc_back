@@ -1,3 +1,11 @@
+import logging
+import cv2
+import mediapipe as mp
+import numpy as np
+from django.core.files.uploadedfile import SimpleUploadedFile
+from io import BytesIO
+import os
+
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -5,19 +13,14 @@ from .models import KYC
 from .serializers import KYCSerializer
 from .serializers import KYCVerificationSerializer
 from utils.aws_helper import AWSRekognition
-import logging
-import cv2
-import dlib
-import numpy as np
-from django.core.files.uploadedfile import SimpleUploadedFile
-from io import BytesIO
-import os
 
 logger = logging.getLogger(__name__)
 
-# Initialize Dlib detector and predictor
-detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+# Initialize MediaPipe Face Detection and Landmark Model
+mp_face_detection = mp.solutions.face_detection
+mp_face_mesh = mp.solutions.face_mesh
+face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.2)
+face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.2, min_tracking_confidence=0.2)
 
 class KYCViewSet(viewsets.ModelViewSet):
     queryset = KYC.objects.all()
@@ -41,7 +44,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                 f.write(video_file.read())
 
             is_live, eye_open_image, glare_detected = self.process_video(video_path)
-            
+
             # Handle glare detection
             if glare_detected:
                 os.remove(video_path)
@@ -66,7 +69,7 @@ class KYCViewSet(viewsets.ModelViewSet):
             serializer = KYCVerificationSerializer(data={'selfie': selfie_file})
             if serializer.is_valid():
                 aws = AWSRekognition()
-                
+
                 # Read image file
                 image_file = serializer.validated_data['selfie']
                 image_bytes = image_file.read()
@@ -125,7 +128,7 @@ class KYCViewSet(viewsets.ModelViewSet):
                 self.cleanup_image(image_bytes)  # Delete image after upload to S3
 
                 return Response(
-                    KYCSerializer(kyc).data, 
+                    KYCSerializer(kyc).data,
                     status=status.HTTP_201_CREATED
                 )
 
@@ -159,22 +162,28 @@ class KYCViewSet(viewsets.ModelViewSet):
                 break
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = detector(gray)
-            for face in faces:
-                landmarks = predictor(gray, face)
-                landmarks_points = [(landmarks.part(i).x, landmarks.part(i).y) for i in range(68)]
+            # MediaPipe Face Detection
+            results = face_detection.process(frame)
+            if results.detections:
+                for detection in results.detections:
+                    # Use face mesh to extract landmarks
+                    face_landmarks = face_mesh.process(frame)
 
-                left_eye_points = [36, 37, 38, 39, 40, 41]
-                right_eye_points = [42, 43, 44, 45, 46, 47]
-                left_ear = self.extract_eye_aspect_ratio(landmarks_points, left_eye_points)
-                right_ear = self.extract_eye_aspect_ratio(landmarks_points, right_eye_points)
+                    if face_landmarks.multi_face_landmarks:
+                        for face in face_landmarks.multi_face_landmarks:
+                            landmarks_points = [(lm.x, lm.y) for lm in face.landmark]
 
-                if left_ear > EAR_THRESHOLD and right_ear > EAR_THRESHOLD:
-                    if eye_open_frame is None:
-                        eye_open_frame = frame
+                            left_eye_points = [33, 133, 153, 154, 133, 33]
+                            right_eye_points = [362, 263, 362, 467, 463, 362]
+                            left_ear = self.extract_eye_aspect_ratio(landmarks_points, left_eye_points)
+                            right_ear = self.extract_eye_aspect_ratio(landmarks_points, right_eye_points)
 
-                if left_ear < EAR_THRESHOLD and right_ear < EAR_THRESHOLD:
-                    BLINK_COUNT += 1
+                            if left_ear > EAR_THRESHOLD and right_ear > EAR_THRESHOLD:
+                                if eye_open_frame is None:
+                                    eye_open_frame = frame
+
+                            if left_ear < EAR_THRESHOLD and right_ear < EAR_THRESHOLD:
+                                BLINK_COUNT += 1
 
             # Check for glare: Calculate mean brightness of the image
             if self.check_for_glare(frame):
