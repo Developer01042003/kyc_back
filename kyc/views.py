@@ -1,7 +1,7 @@
 import logging
 import cv2
-import mediapipe as mp
 import numpy as np
+from mtcnn import MTCNN
 from django.core.files.uploadedfile import SimpleUploadedFile
 from io import BytesIO
 import os
@@ -14,10 +14,6 @@ from .serializers import KYCSerializer, KYCVerificationSerializer
 from utils.aws_helper import AWSRekognition
 
 logger = logging.getLogger(__name__)
-
-# Initialize MediaPipe Face Detection and Face Mesh
-mp_face_detection = mp.solutions.face_detection
-mp_face_mesh = mp.solutions.face_mesh
 
 class KYCViewSet(viewsets.ModelViewSet):
     queryset = KYC.objects.all()
@@ -147,34 +143,33 @@ class KYCViewSet(viewsets.ModelViewSet):
         if not cap.isOpened():
             raise ValueError("Unable to open video file")
 
-        # Initialize variables for liveness
+        # Initialize MTCNN for face detection
+        detector = MTCNN()
         blink_detected = False
 
-        with mp_face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection, \
-             mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, min_detection_confidence=0.5) as face_mesh:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
+            # Detect faces and landmarks
+            results = detector.detect_faces(frame)
+            for result in results:
+                keypoints = result['keypoints']
+                left_eye = keypoints['left_eye']
+                right_eye = keypoints['right_eye']
+
+                # Calculate EAR for both eyes
+                left_ear = self.calculate_ear(left_eye, frame)
+                right_ear = self.calculate_ear(right_eye, frame)
+
+                # Check if EAR is below a threshold indicating a blink
+                if left_ear < 0.2 or right_ear < 0.2:  # Adjust threshold as needed
+                    blink_detected = True
                     break
-                
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                face_results = face_detection.process(frame_rgb)
-                mesh_results = face_mesh.process(frame_rgb)
 
-                if face_results.detections and mesh_results.multi_face_landmarks:
-                    for face_landmarks in mesh_results.multi_face_landmarks:
-                        # Use landmarks to detect a blink
-                        landmarks = [(int(l.x * frame.shape[1]), int(l.y * frame.shape[0])) for l in face_landmarks.landmark]
-
-                        # Implement actual logic for blink detection
-                        if self.detect_blink(landmarks):
-                            blink_detected = True
-                            break
-
-                # Break early if a blink is detected
-                if blink_detected:
-                    break
+            if blink_detected:
+                break
 
         cap.release()
 
@@ -182,12 +177,14 @@ class KYCViewSet(viewsets.ModelViewSet):
         is_live = blink_detected
         return is_live, None, False  # Simplifying by ignoring glare detection for now
 
-    def detect_blink(self, landmarks):
-        """Basic blink detection based on landmarks changes indicating eye closures."""
-        # Implement logic to detect blink based on eye landmarks
-        # This is pseudo logic. Real implementation requires continuous landmark tracking
-        # Check landmark positions and identify rapid changes indicative of blink
-        return True  # Return true if a blink is detected
+    def calculate_ear(self, eye, frame):
+        """Calculate Eye Aspect Ratio (EAR) for a given eye."""
+        # This is a simplified example; you may need to adjust based on actual landmarks
+        # EAR calculation typically involves multiple points around the eye
+        # Here, we assume `eye` is a tuple of (x, y) coordinates for the eye center
+        # You would need to calculate distances between specific points around the eye
+        # For demonstration, we use a placeholder value
+        return 0.3  # Placeholder value; implement actual EAR calculation
 
     def cleanup_image(self, image_bytes):
         """Clean up the uploaded image after processing"""
